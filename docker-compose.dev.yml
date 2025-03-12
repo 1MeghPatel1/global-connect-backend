@@ -8,6 +8,7 @@ services:
     container_name: nest_app_dev-socketio-redis
     environment:
       - NODE_ENV=development
+      - DOCKER=1
     ports:
       - "3000:3000"
     volumes:
@@ -15,6 +16,8 @@ services:
       - /app/node_modules
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - app_network
@@ -35,8 +38,29 @@ services:
       timeout: 3s
       retries: 5
 
+  postgres:
+    image: postgres:alpine
+    container_name: postgres_dev
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: chat-app-db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app_network
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
 volumes:
   redis_data:
+  postgres_data:
 
 networks:
   app_network:

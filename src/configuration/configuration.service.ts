@@ -9,7 +9,9 @@ export class ConfigurationService {
     const value = this.configService.get<T>(key);
 
     if (!value || typeof value !== 'string') {
-      throw new Error(`${key} is not a string or is missing`);
+      throw new Error(
+        `ENV Variable Not Found: ${key} is not a string or is missing`,
+      );
     }
 
     return value;

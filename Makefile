@@ -22,3 +22,19 @@ stop:
 # Clean up dangling images
 clean:
 	docker system prune -f
+
+# Start only Redis service in dev mode
+dev-redis:
+	$(COMPOSE_DEV) up -d redis
+
+# Start only PostgreSQL service in dev mode
+dev-db:
+	$(COMPOSE_DEV) up -d postgres
+
+# Start only Redis service in prod mode
+prod-redis:
+	$(COMPOSE_PROD) up -d redis
+
+# Start only PostgreSQL service in prod mode
+prod-db:
+	$(COMPOSE_PROD) up -d postgres
