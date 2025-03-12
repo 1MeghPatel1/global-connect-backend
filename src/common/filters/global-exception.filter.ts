@@ -25,7 +25,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       statusCode = exception.getStatus();
       const response = exception.getResponse();
       message =
-        typeof response === 'string' ? response : (response as any).message;
+        typeof response === 'string'
+          ? response
+          : (response as { message: string }).message;
     }
 
     this.logger.error(
@@ -33,10 +35,15 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       exception instanceof Error ? exception.stack : undefined,
     );
 
-    const responseBody = {
+    const responseBody: {
+      statusCode: number;
+      timestamp: string;
+      path: string;
+      message: string;
+    } = {
       statusCode,
       timestamp: new Date().toISOString(),
-      path: httpAdapter.getRequestUrl(ctx.getRequest()),
+      path: httpAdapter.getRequestUrl(ctx.getRequest()) as string,
       message,
     };
 

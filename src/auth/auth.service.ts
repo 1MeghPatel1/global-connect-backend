@@ -2,7 +2,7 @@ import { ErrorUtil } from '@/common/utils/error.util';
 import { PrismaService } from '@/database/prisma/prisma.service';
 import { AuthProvider, User } from '@prisma/client';
 import axios from 'axios';
-import * as bcrypt from 'bcrypt';
+import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 
 import {

@@ -3,17 +3,14 @@ FROM node:22-alpine AS base
 
 WORKDIR /app
 
-# Enable pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
 # Copy package files
-COPY package.json pnpm-lock.yaml ./
+COPY package.json package-lock.json ./
 
 # ---- Dependencies Stage ----
 FROM base AS deps
 
 # Install dependencies with caching
-RUN pnpm install --frozen-lockfile
+RUN npm ci
 
 # ---- Build Stage (Production) ----
 FROM base AS build
@@ -23,7 +20,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Build the application
-RUN pnpm build
+RUN npm run build
 
 # ---- Production Stage ----
 FROM base AS production
@@ -37,4 +34,4 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 
 # Command to run the application
-CMD ["pnpm", "start:prod"]
+CMD ["npm", "run", "start:prod"]
