@@ -21,7 +21,7 @@ stop:
 
 # Clean up dangling images
 clean:
-	docker system prune -f
+	docker system prune -f --volumes --all
 
 # Start only Redis service in dev mode
 dev-redis:
