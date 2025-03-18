@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 
+import { LibService } from '../lib/lib.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import {
@@ -33,6 +34,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     @Inject('JWT_REFRESH_SECRET') private readonly refreshSecret: string,
+    private libService: LibService,
   ) {}
 
   private generateTokens(payload: JwtPayload): {
@@ -173,9 +175,7 @@ export class AuthService {
     return userWithoutPassword;
   }
 
-  private async registerWithEmail(
-    registerDto: RegisterDto,
-  ): Promise<AuthResponse> {
+  async registerWithEmail(registerDto: RegisterDto): Promise<AuthResponse> {
     const { email, password, username } = registerDto;
 
     if (!email || !password) {
@@ -254,7 +254,7 @@ export class AuthService {
     };
   }
 
-  private async loginWithEmail(loginDto: LoginDto): Promise<AuthResponse> {
+  async loginWithEmail(loginDto: LoginDto): Promise<AuthResponse> {
     const { email, password } = loginDto;
 
     if (!email || !password) {
@@ -328,9 +328,7 @@ export class AuthService {
     };
   }
 
-  private async registerWithGoogle(
-    registerDto: RegisterDto,
-  ): Promise<AuthResponse> {
+  async registerWithGoogle(registerDto: RegisterDto): Promise<AuthResponse> {
     const { accessToken } = registerDto;
 
     if (!accessToken) {
@@ -386,7 +384,7 @@ export class AuthService {
     }
   }
 
-  private async loginWithGoogle(loginDto: LoginDto): Promise<AuthResponse> {
+  async loginWithGoogle(loginDto: LoginDto): Promise<AuthResponse> {
     const { accessToken } = loginDto;
 
     if (!accessToken) {
@@ -422,9 +420,7 @@ export class AuthService {
     }
   }
 
-  private async registerAnonymous(
-    registerDto: RegisterDto,
-  ): Promise<AuthResponse> {
+  async registerAnonymous(registerDto: RegisterDto): Promise<AuthResponse> {
     const { username } = registerDto;
 
     if (!username) {
@@ -482,7 +478,7 @@ export class AuthService {
     };
   }
 
-  private async loginAnonymous(loginDto: LoginDto): Promise<AuthResponse> {
+  async loginAnonymous(loginDto: LoginDto): Promise<AuthResponse> {
     // Find anonymous account
     const account = await this.prisma.account.findFirst({
       where: {
@@ -766,6 +762,69 @@ export class AuthService {
       return true;
     } catch (error) {
       ErrorUtil.handleError(error, 'AuthService.revokeRefreshToken');
+    }
+  }
+
+  async handleGoogleOAuthCallback(code: string): Promise<AuthResponse> {
+    try {
+      const oauth2Client = this.libService.getGoogleOAuth2Client();
+      if (!oauth2Client) {
+        throw new Error('Failed to initialize OAuth2 client');
+      }
+
+      const tokenResponse = await oauth2Client.getToken(code);
+      if (!tokenResponse.tokens) {
+        throw new Error('Failed to get tokens from OAuth2 response');
+      }
+
+      const accessToken = tokenResponse.tokens.access_token;
+      if (!accessToken) {
+        throw new Error('Failed to get access token');
+      }
+
+      oauth2Client.setCredentials(tokenResponse.tokens);
+      const googleUserInfo = await this.getGoogleUserInfo(accessToken);
+
+      // Check if user already exists
+      const existingAccount = await this.prisma.account.findUnique({
+        where: {
+          provider_providerAccountId: {
+            provider: AuthProvider.GOOGLE,
+            providerAccountId: googleUserInfo.id,
+          },
+        },
+        include: { user: true },
+      });
+
+      if (existingAccount) {
+        // User exists, return login response
+        return this.handleExistingGoogleUser(existingAccount, accessToken);
+      }
+
+      // Check if email is already used
+      if (googleUserInfo.email) {
+        const existingUser = await this.prisma.user.findUnique({
+          where: { email: googleUserInfo.email },
+        });
+
+        if (existingUser) {
+          // Link Google account to existing user
+          return this.linkGoogleToExistingUser(
+            existingUser,
+            googleUserInfo,
+            accessToken,
+          );
+        }
+      }
+
+      // Create new user with Google account
+      return this.createNewGoogleUser(
+        googleUserInfo,
+        accessToken,
+        googleUserInfo.name,
+      );
+    } catch (error) {
+      ErrorUtil.handleError(error, 'AuthService.handleGoogleOAuthCallback');
     }
   }
 }

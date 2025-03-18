@@ -1,3 +1,5 @@
+import { Request } from 'express';
+
 import {
   BadRequestException,
   Body,
@@ -21,16 +23,46 @@ import { RequestWithUser } from './interfaces/auth.interface';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Post('register')
+  @Post('register/email')
   @HttpCode(HttpStatus.CREATED)
-  async register(@Body() registerDto: RegisterDto): Promise<AuthResponse> {
-    return this.authService.register(registerDto);
+  async registerWithEmail(
+    @Body() registerDto: RegisterDto,
+  ): Promise<AuthResponse> {
+    return this.authService.registerWithEmail(registerDto);
   }
 
-  @Post('login')
+  @Post('register/google')
+  @HttpCode(HttpStatus.CREATED)
+  async registerWithGoogle(
+    @Body() registerDto: RegisterDto,
+  ): Promise<AuthResponse> {
+    return this.authService.registerWithGoogle(registerDto);
+  }
+
+  @Post('register/anonymous')
+  @HttpCode(HttpStatus.CREATED)
+  async registerAnonymous(
+    @Body() registerDto: RegisterDto,
+  ): Promise<AuthResponse> {
+    return this.authService.registerAnonymous(registerDto);
+  }
+
+  @Post('login/email')
   @HttpCode(HttpStatus.OK)
-  async login(@Body() loginDto: LoginDto): Promise<AuthResponse> {
-    return this.authService.login(loginDto);
+  async loginWithEmail(@Body() loginDto: LoginDto): Promise<AuthResponse> {
+    return this.authService.loginWithEmail(loginDto);
+  }
+
+  @Post('login/google')
+  @HttpCode(HttpStatus.OK)
+  async loginWithGoogle(@Body() loginDto: LoginDto): Promise<AuthResponse> {
+    return this.authService.loginWithGoogle(loginDto);
+  }
+
+  @Post('login/anonymous')
+  @HttpCode(HttpStatus.OK)
+  async loginAnonymous(@Body() loginDto: LoginDto): Promise<AuthResponse> {
+    return this.authService.loginAnonymous(loginDto);
   }
 
   @Post('logout')
@@ -80,5 +112,17 @@ export class AuthController {
       body.refreshToken,
     );
     return { success };
+  }
+
+  @Get('oauth/google/callback')
+  @HttpCode(HttpStatus.OK)
+  async googleOAuthCallback(
+    @Req() req: Request<unknown, unknown, unknown, { code?: string }>,
+  ): Promise<AuthResponse> {
+    const { code } = req.query;
+    if (!code) {
+      throw new BadRequestException('Authorization code is required');
+    }
+    return this.authService.handleGoogleOAuthCallback(code);
   }
 }
