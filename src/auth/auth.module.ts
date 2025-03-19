@@ -1,4 +1,5 @@
 import { PrismaModule } from '@/database/prisma/prisma.module';
+import { LibModule } from '@/lib/lib.module';
 import { UsersModule } from '@/users/users.module';
 
 import { Module } from '@nestjs/common';
@@ -23,6 +24,7 @@ import { AuthService } from './auth.service';
         },
       }),
     }),
+    LibModule,
   ],
   controllers: [AuthController],
   providers: [

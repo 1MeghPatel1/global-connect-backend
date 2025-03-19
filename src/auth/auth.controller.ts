@@ -1,4 +1,4 @@
-import { Request } from 'express';
+import { Request, Response } from 'express';
 
 import {
   BadRequestException,
@@ -9,6 +9,7 @@ import {
   HttpStatus,
   Post,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 
@@ -51,12 +52,6 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async loginWithEmail(@Body() loginDto: LoginDto): Promise<AuthResponse> {
     return this.authService.loginWithEmail(loginDto);
-  }
-
-  @Post('login/google')
-  @HttpCode(HttpStatus.OK)
-  async loginWithGoogle(@Body() loginDto: LoginDto): Promise<AuthResponse> {
-    return this.authService.loginWithGoogle(loginDto);
   }
 
   @Post('login/anonymous')
@@ -112,6 +107,17 @@ export class AuthController {
       body.refreshToken,
     );
     return { success };
+  }
+
+  @Get('oauth/google')
+  @HttpCode(HttpStatus.OK)
+  googleOAuthRedirect(@Res() res: Response): void {
+    try {
+      const redirectUrl = this.authService.getGoogleOAuthUrl();
+      res.redirect(redirectUrl);
+    } catch (_error) {
+      throw new BadRequestException('Failed to redirect to Google OAuth');
+    }
   }
 
   @Get('oauth/google/callback')
