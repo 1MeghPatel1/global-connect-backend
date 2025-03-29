@@ -1,8 +1,10 @@
 import { AuthProvider, Gender } from '@prisma/client';
 import {
+  IsArray,
   IsEmail,
   IsEnum,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
   MinLength,
@@ -14,8 +16,7 @@ export class RegisterDto {
   username: string;
 
   @IsEmail()
-  @IsOptional()
-  email?: string;
+  email: string;
 
   @IsString()
   @IsOptional()
@@ -41,4 +42,17 @@ export class RegisterDto {
   @IsString()
   @IsOptional()
   avatarUrl?: string;
+
+  @IsNumber()
+  @IsOptional()
+  age?: number;
+
+  @IsString()
+  @IsOptional()
+  location?: string;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  interests?: string[];
 }

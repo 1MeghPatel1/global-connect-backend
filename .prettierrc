@@ -7,7 +7,7 @@
   "semi": true,
   "bracketSpacing": true,
   "arrowParens": "always",
-  "endOfLine": "lf",
+  "endOfLine": "auto",
   "plugins": ["@trivago/prettier-plugin-sort-imports"],
   "importOrder": [
     "^@nestjs/(.*)$",

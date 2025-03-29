@@ -58,20 +58,60 @@ enum SubscriptionTier {
   PREMIUM
 }
 
+enum KarmaLevel {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
+  DIAMOND
+}
+
+enum KarmaActionType {
+  CHAT_DURATION
+  SKIP
+  POSITIVE_RATING
+  NEGATIVE_RATING
+  REPORT
+  BLOCK
+  DONATION
+}
+
+enum CreditTransactionType {
+  DAILY_REWARD
+  MESSAGE_SPENT
+  BONUS_RATING
+  BONUS_REFERRAL
+  BONUS_LOGIN
+  DONATION_SENT
+  DONATION_RECEIVED
+}
+
+enum ReactionType {
+  EMOJI
+  LIKE
+  LOVE
+  HAHA
+  WOW
+  SAD
+  ANGRY
+}
+
 model User {
   id           String    @id @default(uuid())
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
-  username     String
+  username     String    @unique
   email        String?   @unique
+  password     String?
   isAnonymous  Boolean   @default(false)
   isVerified   Boolean   @default(false)
   age          Int?
-  gender       Gender    @default(PREFER_NOT_TO_SAY)
+  gender       Gender
   city         String?
   state        String?
   country      String?
   interests    String[]
+  genderPreference Gender?
   online       Boolean   @default(false)
   lastActive   DateTime?
   avatarUrl    String?
@@ -88,6 +128,12 @@ model User {
   blockedUsers        BlockedUser[] @relation("BlockedByUser")
   beingBlocked        BlockedUser[] @relation("BlockedUser")
   subscriptions       Subscription[]
+
+  karma         Karma?
+  chatCredits   ChatCredits?
+
+  // Conversation relationships
+  conversations   Conversation[] @relation("ConversationParticipants")
 
   @@index([isAnonymous])
   @@index([email])
@@ -157,31 +203,42 @@ model BlockedUser {
 }
 
 model Message {
-  id           Int                @id @default(autoincrement())
-  createdAt    DateTime           @default(now())
-  connection   Connection         @relation("ConnectionMessages", fields: [connectionId], references: [id], onDelete: Cascade)
-  connectionId Int
-  sender       User               @relation("Sender", fields: [senderId], references: [id], onDelete: Cascade)
-  senderId     String
-  content      String
-  contentType  MessageContentType
-  status       MessageStatus      @default(SENT)
-  mediaUrl     String?
-  deleted      Boolean            @default(false)
-  reactions    Reaction[]
+  id              String       @id @default(uuid())
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  content         String
+  contentType     MessageContentType @default(TEXT)
+  status          MessageStatus @default(SENT)
+  isRead          Boolean      @default(false)
+  sender          User         @relation("Sender", fields: [senderId], references: [id])
+  senderId        String
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId  String
+  lastMessageFor  Conversation? @relation("LastMessage")
+  connection      Connection   @relation("ConnectionMessages", fields: [connectionId], references: [id])
+  connectionId    Int
+  reactions       Reaction[]
+  metadata        Json?        // For storing GIF data, emoji details etc.
 
-  @@index([connectionId])
+  @@index([senderId])
+  @@index([conversationId])
   @@index([createdAt])
+  @@index([connectionId])
 }
 
 model Reaction {
-  id        Int      @id @default(autoincrement())
-  createdAt DateTime @default(now())
-  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  messageId Int
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId    String
-  emoji     String
+  id          String       @id @default(uuid())
+  createdAt   DateTime     @default(now())
+  type        ReactionType
+  emoji       String?      // For custom emoji reactions
+  message     Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId   String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+
+  @@unique([messageId, userId, type])
+  @@index([messageId])
+  @@index([userId])
 }
 
 model Subscription {
@@ -226,4 +283,71 @@ model Payment {
 
   @@index([subscriptionId])
   @@index([status])
+}
+
+model Karma {
+  id          String       @id @default(uuid())
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  userId      String
+  level       KarmaLevel   @default(BRONZE)
+  points      Int          @default(0)
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  history     KarmaHistory[]
+
+  @@unique([userId])
+  @@index([level])
+}
+
+model KarmaHistory {
+  id        String          @id @default(uuid())
+  createdAt DateTime        @default(now())
+  karmaId   String
+  actionType KarmaActionType
+  points    Int
+  metadata  Json?
+  karma     Karma           @relation(fields: [karmaId], references: [id], onDelete: Cascade)
+
+  @@index([karmaId])
+  @@index([actionType])
+}
+
+model ChatCredits {
+  id                    String    @id @default(uuid())
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  userId               String
+  balance              Int       @default(0)
+  lifetimeEarned       Int       @default(0)
+  lifetimeSpent        Int       @default(0)
+  lastDailyReward      DateTime?
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions         ChatCreditTransaction[]
+
+  @@unique([userId])
+}
+
+model ChatCreditTransaction {
+  id          String                @id @default(uuid())
+  createdAt   DateTime              @default(now())
+  creditsId   String
+  type        CreditTransactionType
+  amount      Int
+  metadata    Json?
+  credits     ChatCredits           @relation(fields: [creditsId], references: [id], onDelete: Cascade)
+
+  @@index([creditsId])
+  @@index([type])
+}
+
+model Conversation {
+  id            String    @id @default(uuid())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  participants  User[]    @relation("ConversationParticipants")
+  messages      Message[]
+  lastMessage   Message?  @relation("LastMessage", fields: [lastMessageId], references: [id])
+  lastMessageId String?   @unique
+
+  @@index([createdAt])
 }

@@ -1,0 +1,761 @@
+import { ErrorUtil } from '@/common/utils/error.util';
+import { PrismaService } from '@/database/prisma/prisma.service';
+import { Gender } from '@prisma/client';
+import axios from 'axios';
+import bcrypt from 'bcrypt';
+import { v4 as uuidv4 } from 'uuid';
+
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+
+import { LibService } from '../lib/lib.service';
+import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
+import {
+  AuthResponse,
+  GoogleUserInfo,
+  JwtPayload,
+  UserDto,
+} from './interfaces/auth.interface';
+
+@Injectable()
+export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+  private readonly ACCESS_TOKEN_EXPIRY = '15m';
+  private readonly REFRESH_TOKEN_EXPIRY = '7d';
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+    @Inject('JWT_REFRESH_SECRET') private readonly refreshSecret: string,
+    private libService: LibService,
+  ) {}
+
+  private generateTokens(payload: JwtPayload): {
+    token: string;
+    refreshToken: string;
+  } {
+    const token = this.jwtService.sign(payload, {
+      expiresIn: this.ACCESS_TOKEN_EXPIRY,
+    });
+
+    const refreshToken = this.jwtService.sign(payload, {
+      secret: this.refreshSecret,
+      expiresIn: this.REFRESH_TOKEN_EXPIRY,
+    });
+
+    return { token, refreshToken };
+  }
+
+  private async createAuthSession(userId: string, username: string, email: string | null): Promise<{
+    token: string;
+    refreshToken: string;
+  }> {
+    const payload: JwtPayload = {
+      sub: userId,
+      email: email || undefined,
+      username,
+    };
+
+    const { token, refreshToken } = this.generateTokens(payload);
+
+    // Store refresh token in database
+    await this.prisma.session.create({
+      data: {
+        userId,
+        sessionToken: refreshToken,
+        expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+      },
+    });
+
+    return { token, refreshToken };
+  }
+
+  // Helper method to update user's online status
+  private async updateUserOnlineStatus(
+    userId: string,
+    isOnline: boolean,
+  ): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        online: isOnline,
+        lastActive: isOnline ? undefined : new Date(),
+      },
+    });
+  }
+
+  // Helper method to map user data to UserDto
+  private mapToUserDto(user: any): UserDto {
+    return {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+    };
+  }
+
+  // Helper method to handle authentication response
+  private async createAuthResponse(user: any): Promise<AuthResponse> {
+    await this.updateUserOnlineStatus(user.id, true);
+    const { token, refreshToken } = await this.createAuthSession(
+      user.id, 
+      user.username, 
+      user.email
+    );
+
+    return {
+      user: this.mapToUserDto(user),
+      token,
+      refreshToken,
+    };
+  }
+
+  async register(registerDto: RegisterDto): Promise<AuthResponse> {
+    try {
+      const { email, password, username, age, location, gender, interests } = registerDto;
+
+      // Check if user already exists
+      const existingUser = await this.prisma.user.findFirst({
+        where: { 
+          OR: [
+            { email },
+            { username }
+          ] 
+        },
+      });
+
+      if (existingUser) {
+        throw new ConflictException('Username or email already exists');
+      }
+
+      // Hash password
+      const passwordHash = await bcrypt.hash(password, 10);
+
+      // Create user and account in a transaction
+      const result = await this.prisma.$transaction(async (prisma) => {
+        // Create user
+        const user = await prisma.user.create({
+          data: {
+            username,
+            email,
+            age,
+            gender: gender as Gender,
+            city: location,
+            interests: interests || [],
+            isVerified: true,
+          },
+        });
+
+        // Create account
+        await prisma.account.create({
+          data: {
+            userId: user.id,
+            provider: 'EMAIL',
+            providerAccountId: email,
+            passwordHash,
+          },
+        });
+
+        return user;
+      });
+
+      return this.createAuthResponse(result);
+    } catch (error) {
+      ErrorUtil.handleError(error, 'AuthService.register');
+    }
+  }
+
+  async login(loginDto: LoginDto): Promise<AuthResponse> {
+    try {
+      const { email, password } = loginDto;
+
+      // Find user by email
+      const user = await this.prisma.user.findUnique({
+        where: { email },
+      });
+
+      if (!user) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
+
+      // Get account with password
+      const account = await this.prisma.account.findFirst({
+        where: {
+          userId: user.id,
+          provider: 'EMAIL',
+        },
+      });
+
+      if (!account || !account.passwordHash) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
+
+      // Verify password
+      const isPasswordValid = await bcrypt.compare(
+        password,
+        account.passwordHash,
+      );
+
+      if (!isPasswordValid) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
+
+      return this.createAuthResponse(user);
+    } catch (error) {
+      ErrorUtil.handleError(error, 'AuthService.login');
+    }
+  }
+
+  async logout(userId: string): Promise<boolean> {
+    try {
+      await Promise.all([
+        this.updateUserOnlineStatus(userId, false),
+        this.prisma.session.deleteMany({ where: { userId } }),
+      ]);
+      return true;
+    } catch (error) {
+      ErrorUtil.handleError(error, 'AuthService.logout');
+    }
+  }
+
+  async validateUser(payload: JwtPayload): Promise<UserDto | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    return this.mapToUserDto(user);
+  }
+
+  async refreshToken(refreshToken: string): Promise<AuthResponse> {
+    try {
+      // Verify refresh token
+      const payload = await this.jwtService.verifyAsync<JwtPayload>(
+        refreshToken,
+        {
+          secret: this.refreshSecret,
+        },
+      );
+
+      // Check if refresh token exists in database
+      const session = await this.prisma.session.findUnique({
+        where: { sessionToken: refreshToken },
+        include: { user: true },
+      });
+
+      if (!session || new Date() > session.expires) {
+        throw new UnauthorizedException('Invalid or expired refresh token');
+      }
+
+      // Generate new tokens
+      const { token: newToken, refreshToken: newRefreshToken } =
+        this.generateTokens(payload);
+
+      // Update session with new refresh token
+      await this.prisma.session.update({
+        where: { id: session.id },
+        data: {
+          sessionToken: newRefreshToken,
+          expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        },
+      });
+
+      return {
+        user: this.mapToUserDto(session.user),
+        token: newToken,
+        refreshToken: newRefreshToken,
+      };
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+  }
+
+  async registerWithGoogle(registerDto: RegisterDto): Promise<AuthResponse> {
+    const { accessToken } = registerDto;
+
+    if (!accessToken) {
+      throw new BadRequestException(
+        'Access token is required for Google registration',
+      );
+    }
+
+    try {
+      // Verify Google token and get user info
+      const googleUserInfo = await this.getGoogleUserInfo(accessToken);
+
+      // Check if user already exists
+      const existingAccount = await this.prisma.account.findUnique({
+        where: {
+          provider_providerAccountId: {
+            provider: 'GOOGLE',
+            providerAccountId: googleUserInfo.id,
+          },
+        },
+        include: { user: true },
+      });
+
+      if (existingAccount) {
+        // User exists, return login response
+        return this.handleExistingGoogleUser(existingAccount, accessToken);
+      }
+
+      // Check if email is already used
+      if (googleUserInfo.email) {
+        const existingUser = await this.prisma.user.findUnique({
+          where: { email: googleUserInfo.email },
+        });
+
+        if (existingUser) {
+          // Link Google account to existing user
+          return this.linkGoogleToExistingUser(
+            existingUser,
+            googleUserInfo,
+            accessToken,
+          );
+        }
+      }
+
+      // Create new user with Google account
+      return this.createNewGoogleUser(
+        googleUserInfo,
+        accessToken,
+        registerDto.username,
+      );
+    } catch (error) {
+      ErrorUtil.handleError(error, 'AuthService.registerWithGoogle');
+    }
+  }
+
+  async loginWithGoogle(loginDto: LoginDto): Promise<AuthResponse> {
+    const { accessToken } = loginDto;
+
+    if (!accessToken) {
+      throw new BadRequestException(
+        'Access token is required for Google login',
+      );
+    }
+
+    try {
+      // Verify Google token and get user info
+      const googleUserInfo = await this.getGoogleUserInfo(accessToken);
+
+      // Find account by Google ID
+      const account = await this.prisma.account.findUnique({
+        where: {
+          provider_providerAccountId: {
+            provider: 'GOOGLE',
+            providerAccountId: googleUserInfo.id,
+          },
+        },
+        include: { user: true },
+      });
+
+      if (!account) {
+        throw new UnauthorizedException(
+          'No account found with this Google account',
+        );
+      }
+
+      return this.handleExistingGoogleUser(account, accessToken);
+    } catch (error) {
+      ErrorUtil.handleError(error, 'AuthService.loginWithGoogle');
+    }
+  }
+
+  async registerAnonymous(registerDto: RegisterDto): Promise<AuthResponse> {
+    const { username } = registerDto;
+
+    if (!username) {
+      throw new BadRequestException(
+        'Username is required for anonymous registration',
+      );
+    }
+
+    // Create anonymous user
+    const user = await this.prisma.user.create({
+      data: {
+        username,
+        isAnonymous: true,
+        isVerified: false,
+        online: true,
+        lastActive: new Date(),
+        gender: registerDto.gender || undefined,
+        avatarUrl: registerDto.avatarUrl || undefined,
+      },
+    });
+
+    // Create anonymous account
+    const anonymousId = uuidv4();
+    await this.prisma.account.create({
+      data: {
+        userId: user.id,
+        provider: 'ANONYMOUS',
+        providerAccountId: anonymousId,
+      },
+    });
+
+    // Create session
+    const sessionToken = uuidv4();
+    await this.prisma.session.create({
+      data: {
+        userId: user.id,
+        expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+        sessionToken,
+      },
+    });
+
+    // Generate JWT token
+    const payload: JwtPayload = {
+      sub: user.id,
+      username: user.username,
+      isAnonymous: true,
+    };
+
+    const accessToken = this.jwtService.sign(payload);
+
+    return {
+      user,
+      accessToken,
+      refreshToken: sessionToken,
+    };
+  }
+
+  async loginAnonymous(loginDto: LoginDto): Promise<AuthResponse> {
+    // Find anonymous account
+    const account = await this.prisma.account.findFirst({
+      where: {
+        providerAccountId: loginDto.accessToken, // Using accessToken as anonymous ID
+        provider: 'ANONYMOUS',
+      },
+      include: { user: true },
+    });
+
+    if (!account) {
+      throw new BadRequestException(
+        'Anonymous account not found. Please register first.',
+      );
+    }
+
+    // Update user's online status and create session
+    const sessionToken = uuidv4();
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: account.user.id },
+        data: { online: true },
+      }),
+      this.prisma.session.create({
+        data: {
+          userId: account.user.id,
+          expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          sessionToken,
+        },
+      }),
+    ]);
+
+    const payload: JwtPayload = {
+      sub: account.user.id,
+      username: account.user.username,
+      isAnonymous: true,
+    };
+
+    return {
+      user: account.user,
+      accessToken: this.jwtService.sign(payload),
+      refreshToken: sessionToken,
+    };
+  }
+
+  private async getGoogleUserInfo(
+    accessToken: string,
+  ): Promise<GoogleUserInfo> {
+    try {
+      const response = await axios.get(
+        'https://www.googleapis.com/oauth2/v2/userinfo',
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        },
+      );
+      return response.data as GoogleUserInfo;
+    } catch (error) {
+      ErrorUtil.handleError(error, 'AuthService.getGoogleUserInfo');
+    }
+  }
+
+  private async handleExistingGoogleUser(
+    account: {
+      id: string;
+      user: any;
+    },
+    accessToken: string,
+  ): Promise<AuthResponse> {
+    // Update token information
+    await this.prisma.account.update({
+      where: { id: account.id },
+      data: {
+        accessToken,
+        expiresAt: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
+      },
+    });
+
+    // Update user's online status
+    await this.prisma.user.update({
+      where: { id: account.user.id },
+      data: { online: true },
+    });
+
+    // Create new session
+    const sessionToken = uuidv4();
+    await this.prisma.session.create({
+      data: {
+        userId: account.user.id,
+        expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+        sessionToken,
+      },
+    });
+
+    // Generate JWT token
+    const payload: JwtPayload = {
+      sub: account.user.id,
+      email: account.user.email || undefined,
+      username: account.user.username,
+      isAnonymous: account.user.isAnonymous,
+    };
+
+    const jwtToken = this.jwtService.sign(payload);
+
+    return {
+      user: account.user,
+      accessToken: jwtToken,
+      refreshToken: sessionToken,
+    };
+  }
+
+  private async linkGoogleToExistingUser(
+    user: any,
+    googleUserInfo: GoogleUserInfo,
+    accessToken: string,
+  ): Promise<AuthResponse> {
+    // Create Google account linked to existing user
+    await this.prisma.account.create({
+      data: {
+        userId: user.id,
+        provider: 'GOOGLE',
+        providerAccountId: googleUserInfo.id,
+        accessToken,
+        expiresAt: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
+      },
+    });
+
+    // Update user's online status
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        online: true,
+        isVerified: true, // Mark as verified since Google accounts are verified
+      },
+    });
+
+    // Create new session
+    const sessionToken = uuidv4();
+    await this.prisma.session.create({
+      data: {
+        userId: user.id,
+        expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+        sessionToken,
+      },
+    });
+
+    // Generate JWT token
+    const payload: JwtPayload = {
+      sub: user.id,
+      email: user.email || undefined,
+      username: user.username,
+      isAnonymous: user.isAnonymous,
+    };
+
+    const jwtToken = this.jwtService.sign(payload);
+
+    return {
+      user,
+      accessToken: jwtToken,
+      refreshToken: sessionToken,
+    };
+  }
+
+  private async createNewGoogleUser(
+    googleUserInfo: GoogleUserInfo,
+    accessToken: string,
+    providedUsername?: string,
+  ): Promise<AuthResponse> {
+    // Create user and account in a transaction
+    const result = await this.prisma.$transaction(async (prisma) => {
+      // Generate username if not provided
+      const username =
+        providedUsername ||
+        googleUserInfo.name ||
+        googleUserInfo.given_name ||
+        `user_${Math.random().toString(36).substring(2, 10)}`;
+
+      // Create user
+      const user = await prisma.user.create({
+        data: {
+          email: googleUserInfo.email,
+          username,
+          isVerified: googleUserInfo.verified_email,
+          isAnonymous: false,
+          online: true,
+          lastActive: new Date(),
+          avatarUrl: googleUserInfo.picture,
+        },
+      });
+
+      // Create account
+      await prisma.account.create({
+        data: {
+          userId: user.id,
+          provider: 'GOOGLE',
+          providerAccountId: googleUserInfo.id,
+          accessToken,
+          expiresAt: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
+        },
+      });
+
+      // Create session
+      const sessionToken = uuidv4();
+      await prisma.session.create({
+        data: {
+          userId: user.id,
+          expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+          sessionToken,
+        },
+      });
+
+      return { user, sessionToken };
+    });
+
+    // Generate JWT token
+    const payload: JwtPayload = {
+      sub: result.user.id,
+      email: result.user.email || undefined,
+      username: result.user.username,
+      isAnonymous: result.user.isAnonymous,
+    };
+
+    const jwtToken = this.jwtService.sign(payload);
+
+    return {
+      user: result.user,
+      accessToken: jwtToken,
+      refreshToken: result.sessionToken,
+    };
+  }
+
+  async revokeRefreshToken(refreshToken: string): Promise<boolean> {
+    try {
+      await this.prisma.session.delete({
+        where: { sessionToken: refreshToken },
+      });
+      return true;
+    } catch (error) {
+      ErrorUtil.handleError(error, 'AuthService.revokeRefreshToken');
+    }
+  }
+
+  async handleGoogleOAuthCallback(code: string): Promise<AuthResponse> {
+    try {
+      const oauth2Client = this.libService.getGoogleOAuth2Client();
+      if (!oauth2Client) {
+        throw new Error('Failed to initialize OAuth2 client');
+      }
+
+      const tokenResponse = await oauth2Client.getToken(code);
+      if (!tokenResponse.tokens) {
+        throw new Error('Failed to get tokens from OAuth2 response');
+      }
+
+      const accessToken = tokenResponse.tokens.access_token;
+      if (!accessToken) {
+        throw new Error('Failed to get access token');
+      }
+
+      oauth2Client.setCredentials(tokenResponse.tokens);
+      const googleUserInfo = await this.getGoogleUserInfo(accessToken);
+
+      // Check if user already exists
+      const existingAccount = await this.prisma.account.findUnique({
+        where: {
+          provider_providerAccountId: {
+            provider: 'GOOGLE',
+            providerAccountId: googleUserInfo.id,
+          },
+        },
+        include: { user: true },
+      });
+
+      if (existingAccount) {
+        // User exists, return login response
+        return this.handleExistingGoogleUser(existingAccount, accessToken);
+      }
+
+      // Check if email is already used
+      if (googleUserInfo.email) {
+        const existingUser = await this.prisma.user.findUnique({
+          where: { email: googleUserInfo.email },
+        });
+
+        if (existingUser) {
+          // Link Google account to existing user
+          return this.linkGoogleToExistingUser(
+            existingUser,
+            googleUserInfo,
+            accessToken,
+          );
+        }
+      }
+
+      // Create new user with Google account
+      return this.createNewGoogleUser(
+        googleUserInfo,
+        accessToken,
+        googleUserInfo.name,
+      );
+    } catch (error) {
+      ErrorUtil.handleError(error, 'AuthService.handleGoogleOAuthCallback');
+    }
+  }
+
+  getGoogleOAuthUrl(): string {
+    try {
+      const rootUrl = 'https://accounts.google.com/o/oauth2/v2/auth';
+      const options = {
+        redirect_uri: process.env.GOOGLE_REDIRECT_URI || '',
+        client_id: process.env.GOOGLE_CLIENT_ID || '',
+        access_type: 'offline',
+        response_type: 'code',
+        prompt: 'consent',
+        scope: [
+          'https://www.googleapis.com/auth/userinfo.profile',
+          'https://www.googleapis.com/auth/userinfo.email',
+        ].join(' '),
+      };
+
+      const qs = new URLSearchParams(options);
+      return `${rootUrl}?${qs.toString()}`;
+    } catch (_error) {
+      throw new Error('Failed to generate Google OAuth URL');
+    }
+  }
+}

@@ -1,15 +1,35 @@
-import { IsArray, IsBoolean, IsOptional } from 'class-validator';
+import { Gender } from '@prisma/client';
+import {
+  IsArray,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+} from 'class-validator';
 
-import { PartialType } from '@nestjs/mapped-types';
+export class UpdateUserDto {
+  @IsString()
+  @IsOptional()
+  username?: string;
 
-import { CreateUserDto } from './create-user.dto';
+  @IsNumber()
+  @IsOptional()
+  age?: number;
 
-export class UpdateUserDto extends PartialType(CreateUserDto) {
+  @IsString()
+  @IsOptional()
+  location?: string;
+
   @IsArray()
+  @IsString({ each: true })
   @IsOptional()
   interests?: string[];
 
-  @IsBoolean()
+  @IsEnum(Gender)
   @IsOptional()
-  online?: boolean;
+  gender?: Gender;
+
+  @IsString()
+  @IsOptional()
+  avatar?: string;
 }

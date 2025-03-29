@@ -1,5 +1,6 @@
 import { AppModule } from '@/app.module';
 import { RedisIoAdapter } from '@/common/adapters/redis-io.adapter';
+import { ConfigurationService } from '@/configuration/configuration.service';
 
 import { NestFactory } from '@nestjs/core';
 import { HttpAdapterHost } from '@nestjs/core';
@@ -14,6 +15,8 @@ async function bootstrap() {
   const adapterHost = app.get(HttpAdapterHost);
   app.useGlobalFilters(new GlobalExceptionFilter(adapterHost));
 
-  await app.listen(process.env.PORT ?? 3000);
+  const configService = app.get(ConfigurationService);
+  const port = configService.get('PORT') ?? '3000';
+  await app.listen(parseInt(port, 10));
 }
 void bootstrap();

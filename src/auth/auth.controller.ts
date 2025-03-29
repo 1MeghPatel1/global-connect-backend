@@ -24,40 +24,21 @@ import { RequestWithUser } from './interfaces/auth.interface';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Post('register/email')
-  @HttpCode(HttpStatus.CREATED)
-  async registerWithEmail(
-    @Body() registerDto: RegisterDto,
-  ): Promise<AuthResponse> {
-    return this.authService.registerWithEmail(registerDto);
+  @Post('register')
+  async register(@Body() registerDto: RegisterDto) {
+    return await this.authService.register(registerDto);
   }
 
-  @Post('register/google')
-  @HttpCode(HttpStatus.CREATED)
-  async registerWithGoogle(
-    @Body() registerDto: RegisterDto,
-  ): Promise<AuthResponse> {
-    return this.authService.registerWithGoogle(registerDto);
-  }
-
-  @Post('register/anonymous')
-  @HttpCode(HttpStatus.CREATED)
-  async registerAnonymous(
-    @Body() registerDto: RegisterDto,
-  ): Promise<AuthResponse> {
-    return this.authService.registerAnonymous(registerDto);
-  }
-
-  @Post('login/email')
+  @Post('login')
   @HttpCode(HttpStatus.OK)
-  async loginWithEmail(@Body() loginDto: LoginDto): Promise<AuthResponse> {
-    return this.authService.loginWithEmail(loginDto);
+  async login(@Body() loginDto: LoginDto) {
+    return await this.authService.login(loginDto);
   }
 
-  @Post('login/anonymous')
+  @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  async loginAnonymous(@Body() loginDto: LoginDto): Promise<AuthResponse> {
-    return this.authService.loginAnonymous(loginDto);
+  async refreshToken(@Body('refreshToken') refreshToken: string) {
+    return await this.authService.refreshToken(refreshToken);
   }
 
   @Post('logout')
@@ -72,18 +53,6 @@ export class AuthController {
 
     const success = await this.authService.logout(userId);
     return { success };
-  }
-
-  @Post('refresh')
-  @HttpCode(HttpStatus.OK)
-  async refreshToken(
-    @Body() body: { refreshToken: string },
-  ): Promise<AuthResponse> {
-    if (!body.refreshToken) {
-      throw new BadRequestException('Refresh token is required');
-    }
-
-    return this.authService.refreshToken(body.refreshToken);
   }
 
   @Get('me')
@@ -129,6 +98,6 @@ export class AuthController {
     if (!code) {
       throw new BadRequestException('Authorization code is required');
     }
-    return this.authService.handleGoogleOAuthCallback(code);
+    return await this.authService.handleGoogleOAuthCallback(code);
   }
 }
